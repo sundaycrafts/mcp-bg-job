@@ -238,7 +238,11 @@ func (s *Server) startLongJob(command []string, cwd, instruction string) (string
 	}
 
 	id := "job_" + time.Now().Format("20060102_150405")
-	logPath := filepath.Join(s.baseDir, "logs", id+".log")
+	logDir := filepath.Join(s.baseDir, "logs")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return "", err
+	}
+	logPath := filepath.Join(logDir, id+".log")
 
 	logFile, err := os.Create(logPath)
 	if err != nil {
@@ -400,7 +404,9 @@ func (s *Server) notifyJobFinished(job *Job, instruction string) {
 }
 
 func (s *Server) saveJob(job *Job) {
-	path := filepath.Join(s.baseDir, "jobs", job.ID+".json")
+	jobDir := filepath.Join(s.baseDir, "jobs")
+	_ = os.MkdirAll(jobDir, 0755)
+	path := filepath.Join(jobDir, job.ID+".json")
 	b, _ := json.MarshalIndent(job, "", "  ")
 	_ = os.WriteFile(path, b, 0644)
 }
