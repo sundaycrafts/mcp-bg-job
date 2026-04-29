@@ -298,10 +298,12 @@ func (s *Server) startLongJob(command []string, cwd, instruction string) (string
 		}
 
 		s.mu.Lock()
-		job.Status = status
+		if job.Status != "canceled" {
+			job.Status = status
+			job.Error = errText
+		}
 		job.ExitCode = &exitCode
 		job.EndedAt = time.Now()
-		job.Error = errText
 		s.mu.Unlock()
 
 		s.saveJob(job)

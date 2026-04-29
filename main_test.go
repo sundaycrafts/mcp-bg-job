@@ -133,10 +133,9 @@ func TestCancelJob(t *testing.T) {
 		t.Fatalf("unexpected cancel message: %s", msg)
 	}
 
-	// The current implementation marks the job as canceled immediately,
-	// while cmd.Wait() may later observe signal termination and overwrite it
-	// as failed. A stronger implementation should preserve "canceled"
-	// after Wait() returns.
+	// Wait for the goroutine to finish so the status is final.
+	waitJobFinished(t, s, jobID)
+
 	job, err := s.getJob(jobID)
 	if err != nil {
 		t.Fatal(err)
