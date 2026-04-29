@@ -260,10 +260,12 @@ func (s *Server) startLongJob(command []string, cwd, instruction string) (string
 		return "", err
 	}
 
+	tw := newTimestampWriter(logFile)
+
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir = cwd
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
+	cmd.Stdout = tw
+	cmd.Stderr = tw
 	cmd.Stdin = nil
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
@@ -291,6 +293,7 @@ func (s *Server) startLongJob(command []string, cwd, instruction string) (string
 	go func() {
 		defer s.wg.Done()
 		err := cmd.Wait()
+		_ = tw.flush()
 		_ = logFile.Close()
 
 		exitCode := 0

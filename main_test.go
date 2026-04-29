@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -175,6 +176,89 @@ func TestSaveAndLoadJobs(t *testing.T) {
 	}
 	if loaded.Status != "exited" {
 		t.Fatalf("expected exited, got %s", loaded.Status)
+	}
+}
+
+func TestTimestampWriter(t *testing.T) {
+	fixed := time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC)
+
+	t.Run("single line", func(t *testing.T) {
+		var buf strings.Builder
+		tw := newTimestampWriter(&buf)
+		tw.timeNow = func() time.Time { return fixed }
+
+		if _, err := fmt.Fprintln(tw, "hello world"); err != nil {
+			t.Fatal(err)
+		}
+		want := "2026-01-02T15:04:05Z hello world\n"
+		if buf.String() != want {
+			t.Fatalf("got %q, want %q", buf.String(), want)
+		}
+	})
+
+	t.Run("multiple lines in one write", func(t *testing.T) {
+		var buf strings.Builder
+		tw := newTimestampWriter(&buf)
+		tw.timeNow = func() time.Time { return fixed }
+
+		if _, err := fmt.Fprint(tw, "line1\nline2\n"); err != nil {
+			t.Fatal(err)
+		}
+		want := "2026-01-02T15:04:05Z line1\n2026-01-02T15:04:05Z line2\n"
+		if buf.String() != want {
+			t.Fatalf("got %q, want %q", buf.String(), want)
+		}
+	})
+
+	t.Run("partial line flushed by flush()", func(t *testing.T) {
+		var buf strings.Builder
+		tw := newTimestampWriter(&buf)
+		tw.timeNow = func() time.Time { return fixed }
+
+		if _, err := fmt.Fprint(tw, "no newline"); err != nil {
+			t.Fatal(err)
+		}
+		if buf.Len() != 0 {
+			t.Fatalf("expected nothing written yet, got %q", buf.String())
+		}
+		if err := tw.flush(); err != nil {
+			t.Fatal(err)
+		}
+		want := "2026-01-02T15:04:05Z no newline\n"
+		if buf.String() != want {
+			t.Fatalf("got %q, want %q", buf.String(), want)
+		}
+	})
+}
+
+func TestStartLongJobLogHasTimestamps(t *testing.T) {
+	s := newTestServer(t)
+
+	_, err := s.startLongJob(
+		[]string{"sh", "-c", "echo timestamped"},
+		t.TempDir(),
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var jobID string
+	for id := range s.jobs {
+		jobID = id
+	}
+
+	waitJobFinished(t, s, jobID)
+
+	log, err := s.tailJobLog(jobID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(log, "T") || !strings.Contains(log, "Z") {
+		t.Fatalf("expected RFC3339 timestamp in log, got: %s", log)
+	}
+	if !strings.Contains(log, "timestamped") {
+		t.Fatalf("expected log content, got: %s", log)
 	}
 }
 
