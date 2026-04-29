@@ -14,28 +14,11 @@ Claude Code's MCP tools are synchronous — a tool call blocks until it returns.
 
 ## Architecture
 
-```
-Claude Code
-  │  MCP stdio (JSON-RPC)
-  ▼
-mcp-bg-job (binary)
-  ├── start_long_job  → spawns child process, returns job_id
-  ├── get_job         → reads in-memory job state
-  ├── list_jobs       → lists all known jobs
-  ├── cancel_job      → sends SIGTERM to process group
-  └── tail_job_log    → reads last N lines from log file
+Claude Code spawns this binary over stdio and speaks JSON-RPC (MCP stdio transport). When a job is started, the server forks a child process and returns immediately. When the child exits, it fires a `notifications/claude/channel` event back over stdout — Claude Code surfaces this as a `<channel>` element in the active conversation.
 
-On job exit → notifications/claude/channel → Claude Code conversation
-```
+Job state is persisted to disk so it survives server restarts. Logs are written with RFC3339 timestamps prepended to each line.
 
-Key source files:
-
-| File | Role |
-|---|---|
-| `main.go` | JSON-RPC dispatch, job lifecycle, process management |
-| `notifier.go` | `Notifier` interface and `JobEvent` struct |
-| `channel_notifier.go` | Sends `notifications/claude/channel` over stdout |
-| `timestamp_writer.go` | Prepends RFC3339 timestamps to log lines |
+The codebase has no external dependencies — standard library only. Read the source directly; it's small enough to fit in one sitting.
 
 ## Development
 
@@ -44,15 +27,18 @@ go test ./...
 go build .
 ```
 
-No external dependencies — standard library only.
-
 ## Release
 
-The release process is: **test → build → tag → publish → install**.
+```sh
+# 1. Confirm tests are green
+go test ./...
 
-1. **Verify** all tests pass before tagging.
-2. **Tag** with a semver version (`vX.Y.Z`). Increment patch for bug fixes, minor for new features, major for breaking changes.
-3. **Push** the tag to the remote so the release is recorded in git history.
-4. **Install** the new binary to wherever Claude Code is configured to find it (typically somewhere on `$PATH`). The MCP server process is spawned fresh by Claude Code, so replacing the binary takes effect on the next Claude Code restart — no separate restart step is needed for the binary itself.
+# 2. Tag with the next semver (patch / minor / major)
+git tag vX.Y.Z
+git push origin main --tags
 
-The binary is self-contained (statically linked, no runtime deps), so installation is just a file copy.
+# 3. Build and install the binary
+go build -o ~/.local/bin/mcp-bg-job .
+```
+
+The binary is self-contained (no runtime deps). Claude Code spawns it fresh per session, so the new binary takes effect on the next Claude Code restart — no other steps needed.
