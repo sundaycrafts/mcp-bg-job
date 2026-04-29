@@ -50,6 +50,7 @@ type Job struct {
 
 type Server struct {
 	mu      sync.Mutex
+	wg      sync.WaitGroup
 	jobs    map[string]*Job
 	baseDir string
 }
@@ -276,7 +277,9 @@ func (s *Server) startLongJob(command []string, cwd, instruction string) (string
 	s.mu.Unlock()
 	s.saveJob(job)
 
+	s.wg.Add(1)
 	go func() {
+		defer s.wg.Done()
 		err := cmd.Wait()
 		_ = logFile.Close()
 

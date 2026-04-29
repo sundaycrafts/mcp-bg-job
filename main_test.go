@@ -12,10 +12,12 @@ func newTestServer(t *testing.T) *Server {
 	t.Helper()
 
 	dir := t.TempDir()
-	return &Server{
+	s := &Server{
 		jobs:    map[string]*Job{},
 		baseDir: dir,
 	}
+	t.Cleanup(s.wg.Wait)
+	return s
 }
 
 func waitJobFinished(t *testing.T, s *Server, jobID string) *Job {
