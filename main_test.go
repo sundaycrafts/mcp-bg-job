@@ -1,9 +1,10 @@
 package main
 
 import (
-	"os"
+	"bufio"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -177,38 +178,33 @@ func TestSaveAndLoadJobs(t *testing.T) {
 	}
 }
 
-func TestNotifyJobFinishedCommand(t *testing.T) {
-	s := newTestServer(t)
-
-	out := filepath.Join(t.TempDir(), "notify.log")
-	t.Setenv("LONGJOB_NOTIFY_COMMAND", "printf '%s' \"$LONGJOB_EVENT_JSON\" > "+out)
+func TestChannelNotifierNotify(t *testing.T) {
+	var buf strings.Builder
+	w := bufio.NewWriter(&buf)
+	var mu sync.Mutex
+	n := &ChannelNotifier{out: w, mu: &mu}
 
 	exitCode := 0
-	job := &Job{
-		ID:       "job_notify",
-		Status:   "exited",
-		ExitCode: &exitCode,
-		LogPath:  "/tmp/job.log",
-		CWD:      "/tmp",
-	}
-
-	s.notifyJobFinished(job, "continue next task")
-
-	b, err := os.ReadFile(out)
+	err := n.Notify(JobEvent{
+		JobID:       "job_notify",
+		Status:      "exited",
+		ExitCode:    &exitCode,
+		LogPath:     "/tmp/job.log",
+		CWD:         "/tmp",
+		Instruction: "continue next task",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got := string(b)
-	if !strings.Contains(got, "job.finished") {
-		t.Fatalf("expected event payload, got: %s", got)
+	got := buf.String()
+	if !strings.Contains(got, `"notifications/claude/channel"`) {
+		t.Fatalf("expected channel notification method, got: %s", got)
+	}
+	if !strings.Contains(got, "job_notify") {
+		t.Fatalf("expected job_id, got: %s", got)
 	}
 	if !strings.Contains(got, "continue next task") {
-		t.Fatalf("expected instruction, got: %s", got)
+		t.Fatalf("expected instruction in content, got: %s", got)
 	}
-
-	// This only tests the notification-command adapter.
-	// Sending a real Claude Code Channel event requires a running Claude Code
-	// session and the channel transport, so it should be covered by an
-	// integration test/manual test later.
 }

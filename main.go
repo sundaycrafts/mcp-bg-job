@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -49,10 +48,13 @@ type Job struct {
 }
 
 type Server struct {
-	mu      sync.Mutex
-	wg      sync.WaitGroup
-	jobs    map[string]*Job
-	baseDir string
+	mu       sync.Mutex
+	wg       sync.WaitGroup
+	jobs     map[string]*Job
+	baseDir  string
+	out      *bufio.Writer
+	outMu    sync.Mutex
+	notifier Notifier
 }
 
 func main() {
@@ -60,14 +62,16 @@ func main() {
 	_ = os.MkdirAll(filepath.Join(baseDir, "jobs"), 0755)
 	_ = os.MkdirAll(filepath.Join(baseDir, "logs"), 0755)
 
+	writer := bufio.NewWriter(os.Stdout)
 	s := &Server{
 		jobs:    map[string]*Job{},
 		baseDir: baseDir,
+		out:     writer,
 	}
+	s.notifier = &ChannelNotifier{out: writer, mu: &s.outMu}
 	s.loadJobs()
 
 	scanner := bufio.NewScanner(os.Stdin)
-	writer := bufio.NewWriter(os.Stdout)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -82,9 +86,11 @@ func main() {
 		}
 
 		b, _ := json.Marshal(resp)
-		_, _ = writer.Write(b)
-		_, _ = writer.WriteString("\n")
-		_ = writer.Flush()
+		s.outMu.Lock()
+		_, _ = s.out.Write(b)
+		_, _ = s.out.WriteString("\n")
+		_ = s.out.Flush()
+		s.outMu.Unlock()
 	}
 }
 
@@ -95,11 +101,15 @@ func (s *Server) handle(req RPCRequest) *RPCResponse {
 			"protocolVersion": "2024-11-05",
 			"capabilities": map[string]any{
 				"tools": map[string]any{},
+				"experimental": map[string]any{
+					"claude/channel": map[string]any{},
+				},
 			},
 			"serverInfo": map[string]any{
 				"name":    "claude-longjob-mcp",
 				"version": "0.1.0",
 			},
+			"instructions": "Background job completion events arrive as <channel source=\"claude-longjob-mcp\" job_id=\"...\" status=\"...\" exit_code=\"...\">. When you receive one, report the result to the user and follow any instructions in the event content.",
 		})
 
 	case "notifications/initialized":
@@ -374,38 +384,17 @@ func (s *Server) cancelJob(id string) (string, error) {
 }
 
 func (s *Server) notifyJobFinished(job *Job, instruction string) {
-	payload := map[string]string{
-		"event":       "job.finished",
-		"job_id":      job.ID,
-		"status":      job.Status,
-		"exit_code":   intPtrToString(job.ExitCode),
-		"log_path":    job.LogPath,
-		"cwd":         job.CWD,
-		"instruction": instruction,
-	}
-
-	// Minimal adapter point:
-	// LONGJOB_NOTIFY_COMMAND='curl -X POST http://127.0.0.1:8787/events ...'
-	notifyCmd := os.Getenv("LONGJOB_NOTIFY_COMMAND")
-	if notifyCmd == "" {
+	if s.notifier == nil {
 		return
 	}
-
-	b, _ := json.Marshal(payload)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "sh", "-lc", notifyCmd)
-	cmd.Env = append(os.Environ(),
-		"LONGJOB_EVENT_JSON="+string(b),
-		"LONGJOB_JOB_ID="+job.ID,
-		"LONGJOB_STATUS="+job.Status,
-		"LONGJOB_EXIT_CODE="+intPtrToString(job.ExitCode),
-		"LONGJOB_LOG_PATH="+job.LogPath,
-		"LONGJOB_INSTRUCTION="+instruction,
-	)
-	_ = cmd.Run()
+	_ = s.notifier.Notify(JobEvent{
+		JobID:       job.ID,
+		Status:      job.Status,
+		ExitCode:    job.ExitCode,
+		LogPath:     job.LogPath,
+		CWD:         job.CWD,
+		Instruction: instruction,
+	})
 }
 
 func (s *Server) saveJob(job *Job) {
